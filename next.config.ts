@@ -24,6 +24,10 @@ const nextConfig = {
   experimental: {
     serverExternalPackages: ['@tldraw/tldraw'],
   },
+  assetPrefix: '/static/',
+  publicRuntimeConfig: {
+    staticFolder: '/static',
+  },
 };
 
 export default nextConfig;
