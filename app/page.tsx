@@ -263,20 +263,17 @@ export default function Home() {
       
       if (typedResults.length > 0) {
         const topResult = typedResults[0];
-        const shape = editor.getShape(topResult["shapeId"]);
+        const shape = editor.getShape(topResult.shapeId);
         
         if (shape) {
-          // Get current bounds of the shape
           const bounds = editor.getShapePageBounds(shape);
           if (bounds) {
-            // Center on the current position of the shape
             editor.centerOnPoint(bounds.center);
             editor.select(shape.id);
-            editor.zoomToSelection();
             
             console.log('Centered on shape:', {
               text: topResult.name,
-              shapeId: topResult["shapeId"],
+              shapeId: topResult.shapeId,
               currentPosition: bounds.center
             });
           }
@@ -307,7 +304,6 @@ export default function Home() {
       if (bounds) {
         editor.centerOnPoint(bounds.center);
         editor.select(shape.id);
-        editor.zoomToSelection();
         
         console.log('Navigated to shape:', {
           text: item.name,
@@ -420,7 +416,7 @@ export default function Home() {
           screenshot
         }]);
 
-        // Center view on the median position
+        // Center view on the median position without changing zoom
         const medianX = relevantShapes.sort((a, b) => a.position.x - b.position.x)[
           Math.floor(relevantShapes.length / 2)
         ].position.x;
@@ -428,8 +424,8 @@ export default function Home() {
           Math.floor(relevantShapes.length / 2)
         ].position.y;
 
+        // Only pan to the point, don't zoom
         editor.centerOnPoint(new Vec(medianX, medianY));
-        editor.zoomToFit();
       } else {
         setMessages(prev => [...prev, {
           role: 'assistant',
@@ -601,14 +597,16 @@ const styles: { [key: string]: React.CSSProperties } = {
   userMessage: {
     alignSelf: 'flex-end',
     backgroundColor: '#0066cc',
-    color: 'white',
+    color: '#ffffff',
     padding: '8px 12px',
     borderRadius: '12px 12px 0 12px',
     maxWidth: '85%',
+    boxShadow: '0 2px 4px rgba(0,0,0,0.1)',
   },
   assistantMessage: {
     alignSelf: 'flex-start',
-    backgroundColor: 'white',
+    backgroundColor: '#ffffff',
+    color: '#000000',
     padding: '8px 12px',
     borderRadius: '12px 12px 12px 0',
     maxWidth: '85%',
@@ -617,6 +615,9 @@ const styles: { [key: string]: React.CSSProperties } = {
   messageContent: {
     marginBottom: '8px',
     wordBreak: 'break-word',
+    color: 'inherit',
+    fontSize: '14px',
+    lineHeight: '1.4',
   },
   screenshotContainer: {
     position: 'relative',
@@ -641,15 +642,15 @@ const styles: { [key: string]: React.CSSProperties } = {
     gap: '8px',
   },
   chatInput: {
-    flex: 1,
     padding: '8px 12px',
-    fontSize: '14px',
-    borderRadius: '20px',
+    fontSize: '16px',
+    flex: 1,
+    borderRadius: '4px',
     border: '1px solid #ddd',
     backgroundColor: '#ffffff',
-    '&:focus': {
-      outline: 'none',
-      borderColor: '#0066cc',
+    color: '#000000',
+    '::placeholder': {
+      color: '#666666',
     },
   },
   chatButton: {
