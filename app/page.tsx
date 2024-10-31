@@ -1062,30 +1062,6 @@ const styles: { [key: string]: React.CSSProperties } = {
     color: '#666666',
     marginTop: '4px',
   },
-
-  loadingSpinner: {
-    display: 'inline-flex',
-    marginLeft: '8px',
-    verticalAlign: 'middle'
-  },
-  
-  spinner: {
-    width: '12px',
-    height: '12px',
-    border: '2px solid currentColor',
-    borderRightColor: 'transparent',
-    borderRadius: '50%',
-    animation: 'spin 0.75s linear infinite',
-  },
-
-  '@keyframes spin': {
-    from: {
-      transform: rotate(0deg)'
-    },
-    to: {
-      transform: rotate(360deg)'
-    }
-  }
 };
 
 const globalStyles = `
