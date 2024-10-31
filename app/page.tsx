@@ -2,7 +2,7 @@
 
 import React, { useEffect, useState, useRef } from 'react';
 import { getEmbedding, EmbeddingIndex } from 'client-vector-search';
-import { Tldraw, useEditor, Editor, Vec } from '@tldraw/tldraw'
+import { Tldraw, useEditor, Editor, Vec, createTLStore, TLStore } from '@tldraw/tldraw'
 import '@tldraw/tldraw/tldraw.css'
 
 interface ObjectItem {
@@ -94,12 +94,54 @@ const getEmbeddingWithRetry = async (text: string, retries = 3): Promise<number[
   }
 };
 
+const PERSISTENCE_KEY = 'tldraw-whiteboard-state';
 export default function Home() {
   const [query, setQuery] = useState<string>('');
   const [results, setResults] = useState<ObjectItem[]>([]);
   const [editor, setEditor] = useState<Editor | null>(null);
   const embeddingIndexRef = useRef<EmbeddingIndex | null>(null);
+  const [store] = useState(() => createTLStore());
+  const [loadingState, setLoadingState] = useState<
+    { status: 'loading' } | { status: 'ready' } | { status: 'error'; error: string }
+  >({
+    status: 'loading',
+  });
 
+  // Load persisted state
+  useEffect(() => {
+    try {
+      const persistedState = localStorage.getItem(PERSISTENCE_KEY);
+      if (persistedState) {
+        const state = JSON.parse(persistedState);
+        store.loadSnapshot(state);
+      }
+      setLoadingState({ status: 'ready' });
+    } catch (error: any) {
+      setLoadingState({ status: 'error', error: error.message });
+    }
+  }, [store]);
+
+  // Save state on changes
+  useEffect(() => {
+    if (!editor) return;
+
+    const handleChange = () => {
+      try {
+        const snapshot = editor.store.getSnapshot();
+        localStorage.setItem(PERSISTENCE_KEY, JSON.stringify(snapshot));
+        console.log('Saved whiteboard state to localStorage');
+      } catch (error) {
+        console.error('Failed to save whiteboard state:', error);
+      }
+    };
+
+    const cleanup = editor.store.listen(handleChange);
+    return () => {
+      cleanup();
+    };
+  }, [editor]);
+
+  // Initialize embedding index
   useEffect(() => {
     embeddingIndexRef.current = new EmbeddingIndex();
     embeddingIndexRef.current.getAllObjectsFromIndexedDB('indexedDB').catch(console.error);
@@ -245,9 +287,38 @@ export default function Home() {
     }
   };
 
+  // Add a function to handle result click
+  const handleResultClick = (item: ObjectItem) => {
+    if (!editor) return;
+
+    const shape = editor.getShape(item.shapeId);
+    if (shape) {
+      const bounds = editor.getShapePageBounds(shape);
+      if (bounds) {
+        editor.centerOnPoint(bounds.center);
+        editor.select(shape.id);
+        editor.zoomToSelection();
+        
+        console.log('Navigated to shape:', {
+          text: item.name,
+          shapeId: item.shapeId,
+          currentPosition: bounds.center
+        });
+      }
+    } else {
+      console.log('Shape not found:', item.shapeId);
+    }
+  };
+
   return (
     <div style={styles.container}>
-      <div style={styles.searchContainer}>
+      <form 
+        style={styles.searchContainer}
+        onSubmit={(e) => {
+          e.preventDefault();
+          handleSearch();
+        }}
+      >
         <input
           type="text"
           value={query}
@@ -255,23 +326,52 @@ export default function Home() {
           placeholder="Search within whiteboard..."
           style={styles.input}
         />
-        <button onClick={handleSearch} style={styles.button}>Search</button>
-        <button onClick={handleDeleteIndex} style={styles.deleteButton}>Clear Index</button>
-      </div>
+        <button type="submit" style={styles.button}>Search</button>
+        <button 
+          type="button"
+          onClick={handleDeleteIndex} 
+          style={styles.deleteButton}
+        >
+          Clear Index
+        </button>
+      </form>
       {results.length > 0 && (
         <div style={styles.resultsContainer}>
-          <h3>Results:</h3>
-          <ul>
+          <h3 style={styles.resultsTitle}>Results:</h3>
+          <ul style={styles.resultsList}>
             {results.map((item) => (
-              <li key={item.id}>{item.name}</li>
+              <li 
+                key={item.id} 
+                style={styles.resultItem}
+                onClick={() => handleResultClick(item)}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.backgroundColor = '#f0f0f0';
+                  e.currentTarget.style.cursor = 'pointer';
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.backgroundColor = '#ffffff';
+                }}
+              >
+                {item.name}
+              </li>
             ))}
           </ul>
         </div>
       )}
       <div style={styles.whiteboard}>
-        <Tldraw onMount={setEditor}>
-          <WhiteboardWithSearch onShapesChange={updateVectorIndex} />
-        </Tldraw>
+        {loadingState.status === 'error' ? (
+          <div style={styles.errorMessage}>
+            Error loading whiteboard: {loadingState.error}
+          </div>
+        ) : (
+          <Tldraw
+            store={store}
+            onMount={setEditor}
+            autoFocus
+          >
+            <WhiteboardWithSearch onShapesChange={updateVectorIndex} />
+          </Tldraw>
+        )}
       </div>
     </div>
   );
@@ -284,6 +384,7 @@ const styles: { [key: string]: React.CSSProperties } = {
     flexDirection: 'column',
     padding: '10px',
     gap: '10px',
+    backgroundColor: '#ffffff',
   },
   searchContainer: {
     display: 'flex',
@@ -292,13 +393,19 @@ const styles: { [key: string]: React.CSSProperties } = {
     padding: '10px',
     backgroundColor: '#f5f5f5',
     borderRadius: '8px',
+    boxShadow: '0 2px 4px rgba(0,0,0,0.1)',
   },
   input: {
     padding: '8px 12px',
-    fontSize: '14px',
+    fontSize: '16px',
     flex: 1,
     borderRadius: '4px',
     border: '1px solid #ddd',
+    backgroundColor: '#ffffff',
+    color: '#000000',
+    '::placeholder': {
+      color: '#666666',
+    },
   },
   button: {
     padding: '8px 16px',
@@ -308,6 +415,7 @@ const styles: { [key: string]: React.CSSProperties } = {
     color: 'white',
     border: 'none',
     borderRadius: '4px',
+    fontWeight: '500',
   },
   deleteButton: {
     padding: '8px 16px',
@@ -317,18 +425,58 @@ const styles: { [key: string]: React.CSSProperties } = {
     border: 'none',
     borderRadius: '4px',
     cursor: 'pointer',
+    fontWeight: '500',
   },
   resultsContainer: {
-    padding: '10px',
-    backgroundColor: '#f5f5f5',
+    padding: '15px',
+    backgroundColor: '#ffffff',
     borderRadius: '8px',
     maxHeight: '150px',
     overflowY: 'auto',
+    boxShadow: '0 2px 4px rgba(0,0,0,0.1)',
+    border: '1px solid #e0e0e0',
+  },
+  resultsList: {
+    listStyle: 'none',
+    padding: 0,
+    margin: 0,
+  },
+  resultItem: {
+    padding: '8px 12px',
+    borderBottom: '1px solid #e0e0e0',
+    color: '#000000',
+    fontSize: '14px',
+    lineHeight: '1.4',
+    backgroundColor: '#ffffff',
+    transition: 'background-color 0.2s ease',
+    userSelect: 'none', // Prevent text selection on click
+    '&:last-child': {
+      borderBottom: 'none',
+    },
+    '&:hover': {
+      backgroundColor: '#f8f8f8',
+    },
+  },
+  resultsTitle: {
+    margin: '0 0 10px 0',
+    color: '#333333',
+    fontSize: '16px',
+    fontWeight: '500',
   },
   whiteboard: {
     flex: 1,
     borderRadius: '8px',
     overflow: 'hidden',
     border: '1px solid #ddd',
+    backgroundColor: '#ffffff',
+  },
+  errorMessage: {
+    padding: '20px',
+    color: '#ff4d4d',
+    textAlign: 'center',
+    backgroundColor: '#fff',
+    border: '1px solid #ff4d4d',
+    borderRadius: '8px',
+    margin: '20px',
   },
 };

@@ -1,6 +1,11 @@
 /** @type {import('next').NextConfig} */
-const nextConfig = {//next.config.js
-  webpack: (config) => {
+const nextConfig = {
+  output: 'export',
+  basePath: process.env.NODE_ENV === 'production' ? '/arkeith' : '',
+  images: {
+    unoptimized: true,
+  },
+  webpack: (config: any) => {
     config.resolve.alias = {
       ...config.resolve.alias,
       sharp$: false,
@@ -11,4 +16,4 @@ const nextConfig = {//next.config.js
   },
 };
 
-module.exports = nextConfig;
+export default nextConfig;
