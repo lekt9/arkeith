@@ -1,6 +1,5 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-  output: 'export',
   images: {
     unoptimized: true,
   },
@@ -22,9 +21,8 @@ const nextConfig = {
     return config;
   },
   experimental: {
-    serverExternalPackages: ['@tldraw/tldraw'],
+    serverExternalPackages: ['@tldraw/tldraw', 'groq-sdk'],
   },
-  assetPrefix: '/static/',
   publicRuntimeConfig: {
     staticFolder: '/static',
   },

@@ -4,7 +4,6 @@ import React, { useEffect, useState, useRef } from 'react';
 import { getEmbedding, EmbeddingIndex } from 'client-vector-search';
 import { Tldraw, useEditor, Editor, Vec, createTLStore, TLStore, Box, exportAs, copyAs, exportToBlob } from '@tldraw/tldraw'
 import '@tldraw/tldraw/tldraw.css'
-import Groq from 'groq-sdk';
 
 interface ObjectItem {
   id: string;
@@ -103,10 +102,6 @@ interface ChatMessage {
   isLoading?: boolean;
 }
 
-interface Settings {
-  groqApiKey: string;
-}
-
 // Add this component near the top of the file, before the Home component
 const LoadingSpinner: React.FC = () => (
   <div style={{
@@ -147,19 +142,6 @@ export default function Home() {
   const [isChatMode, setIsChatMode] = useState(false);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [chatInput, setChatInput] = useState('');
-  const groq = new Groq({
-    apiKey: '', // Start with empty API key
-    dangerouslyAllowBrowser: true
-  });
-  const [showSettings, setShowSettings] = useState(false);
-  const [settings, setSettings] = useState<Settings>(() => {
-    // Initialize settings from localStorage
-    if (typeof window !== 'undefined') {
-      const savedSettings = localStorage.getItem('whiteboard-settings');
-      return savedSettings ? JSON.parse(savedSettings) : { groqApiKey: '' };
-    }
-    return { groqApiKey: '' };
-  });
   const [currentScreenshot, setCurrentScreenshot] = useState<string | null>(null);
   // Load persisted state
   useEffect(() => {
@@ -427,63 +409,27 @@ export default function Home() {
     searchContext: string,
     base64Image: string | null
   ) => {
-    if (!settings.groqApiKey) {
-      throw new Error('Please set your GROQ API key in settings');
-    }
-
     try {
-      const formattedMessages = [
-      ]
+      const response = await fetch('/api/chat', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          messages,
+          searchContext,
+          base64Image
+        })
+      });
 
-      // Start with system message and search context
-      formattedMessages.push(...[
-        {
-          role: "user",
-          content: `You are an AI assistant helping to analyze and discuss content from a whiteboard. The user's query is related to the following content found on the whiteboard, make sense of it and assume that this part is just text extracted from the whiteboard - ignore gibberish:\n\n${searchContext}`
-        }
-      ]);
-
-      // Add conversation history
-      formattedMessages.push(...messages.map(msg => ({
-        role: msg.role,
-        content: msg.content
-      })));
-      // Add the image as a separate message if available
-      if (base64Image) {
-        formattedMessages.push({
-          role: "user",
-          content: [
-            {
-              type: "text",
-              text: "Here is the relevant section of the whiteboard:" + searchContext
-            },
-            {
-              type: "image_url",
-              image_url: {
-                url: base64Image
-              }
-            }
-          ]
-        });
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.message || 'Failed to generate response');
       }
 
+      const data = await response.json();
+      return data.content;
 
-      console.log('Sending messages to GROQ:', {
-        messageCount: formattedMessages.length,
-        hasImage: !!base64Image,
-        searchContext: searchContext.substring(0, 100) + '...' // Log preview of context
-      });
-
-      const completion = await groq.chat.completions.create({
-        messages: formattedMessages,
-        model: "llama-3.2-11b-vision-preview",
-        temperature: 0.7,
-        max_tokens: 2048,
-        top_p: 1,
-        stream: false
-      });
-
-      return completion.choices[0]?.message?.content || 'No response generated';
     } catch (error) {
       console.error('Error generating chat response:', error);
       throw error;
@@ -493,13 +439,6 @@ export default function Home() {
   // Update the handleChat function
   const handleChat = async () => {
     if (!chatInput.trim() || !editor || !embeddingIndexRef.current) return;
-    if (!settings.groqApiKey) {
-      setMessages(prev => [...prev, {
-        role: 'assistant',
-        content: 'Please set your GROQ API key in settings first.'
-      }]);
-      return;
-    }
     
     const userInputText = chatInput;
     setChatInput(''); // Clear input immediately
@@ -512,7 +451,6 @@ export default function Home() {
     }]);
     
     setIsLoading(true);
-    groq.apiKey = settings.groqApiKey;
 
     try {
       // First, perform the search
@@ -606,19 +544,6 @@ ${text}`;
     }
   };
 
-  useEffect(() => {
-    if (settings.groqApiKey) {
-      groq.apiKey = settings.groqApiKey;
-      console.log('Initialized GROQ with API key from settings');
-    }
-  }, [settings.groqApiKey]);
-
-  const handleSettingsUpdate = (newSettings: Settings) => {
-    setSettings(newSettings);
-    localStorage.setItem('whiteboard-settings', JSON.stringify(newSettings));
-    groq.apiKey = newSettings.groqApiKey;
-  };
-
   return (
     <div style={styles.container}>
       <div style={styles.mainContent}>
@@ -630,7 +555,7 @@ ${text}`;
             placeholder="Search within whiteboard..."
             style={styles.input}
           />
-          <button type="submit" style={styles.button}>Search</button>
+          <button type="submit" style={styles.button} onClick={handleSearch}>Search</button>
           {/* <button 
             type="button"
             onClick={handleDeleteIndex} 
@@ -638,36 +563,7 @@ ${text}`;
           >
             Clear Index
           </button> */}
-          <button
-            type="button"
-            onClick={() => setShowSettings(!showSettings)}
-            style={styles.settingsButton}
-          >
-            ⚙️ Settings
-          </button>
         </div>
-
-        {showSettings && (
-          <div style={styles.settingsPane}>
-            <h3 style={styles.settingsTitle}>Settings</h3>
-            <div style={styles.settingGroup}>
-              <label style={styles.settingLabel}>
-                GROQ API Key:
-                <input
-                  type="password"
-                  value={settings.groqApiKey}
-                  onChange={(e) => handleSettingsUpdate({ ...settings, groqApiKey: e.target.value })}
-                  placeholder="Enter your GROQ API key"
-                  style={styles.settingInput}
-                />
-              </label>
-            </div>
-            <div style={styles.settingHelp}>
-              Your API key is stored locally and never sent to any server except GROQ.
-            </div>
-          </div>
-        )}
-
         {results.length > 0 && (
           <div style={styles.resultsContainer}>
             <h3 style={styles.resultsTitle}>Results:</h3>
