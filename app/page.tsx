@@ -1,10 +1,32 @@
 'use client'
 
-import React, { useEffect, useState, useRef } from 'react';
+import React, { useEffect, useState, useRef, Suspense } from 'react';
 import { getEmbedding, EmbeddingIndex } from 'client-vector-search';
-import { Tldraw, useEditor, Editor, Vec, createTLStore, TLStore, Box, exportAs, copyAs, exportToBlob } from '@tldraw/tldraw'
-import '@tldraw/tldraw/tldraw.css'
+import dynamic from 'next/dynamic';
 import Groq from 'groq-sdk';
+
+// Dynamically import TLDraw with no SSR
+const TldrawWrapper = dynamic(
+  () => import('@tldraw/tldraw').then((mod) => {
+    const { Tldraw } = mod;
+    return ({ children, ...props }: any) => (
+      <Tldraw {...props}>
+        {children}
+      </Tldraw>
+    );
+  }),
+  { ssr: false }
+);
+
+// Import other TLDraw components dynamically
+const {
+  useEditor,
+  Editor,
+  Vec,
+  createTLStore,
+  Box,
+  exportToBlob
+} = await import('@tldraw/tldraw');
 
 interface ObjectItem {
   id: string;
@@ -697,13 +719,15 @@ ${text}`;
               Error loading whiteboard: {loadingState.error}
             </div>
           ) : (
-            <Tldraw
-              store={store}
-              onMount={setEditor}
-              autoFocus
-            >
-              <WhiteboardWithSearch onShapesChange={updateVectorIndex} />
-            </Tldraw>
+            <Suspense fallback={<div>Loading whiteboard...</div>}>
+              <TldrawWrapper
+                store={store}
+                onMount={setEditor}
+                autoFocus
+              >
+                <WhiteboardWithSearch onShapesChange={updateVectorIndex} />
+              </TldrawWrapper>
+            </Suspense>
           )}
         </div>
       </div>
@@ -1056,10 +1080,10 @@ const styles: { [key: string]: React.CSSProperties } = {
 
   '@keyframes spin': {
     from: {
-      transform: 'rotate(0deg)'
+      transform: rotate(0deg)'
     },
     to: {
-      transform: 'rotate(360deg)'
+      transform: rotate(360deg)'
     }
   }
 };

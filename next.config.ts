@@ -14,12 +14,17 @@ const nextConfig = {
       sharp$: false,
       'onnxruntime-node$': false,
     };
-
+    config.resolve.fallback = {
+      ...config.resolve.fallback,
+      fs: false,
+      net: false,
+      tls: false,
+    };
     return config;
   },
   experimental: {
-		serverComponentsExternalPackages: ['@tldraw/tldraw'],
-	},
+    serverExternalPackages: ['@tldraw/tldraw'],
+  },
 };
 
 export default nextConfig;
