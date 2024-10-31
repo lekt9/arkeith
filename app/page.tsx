@@ -514,7 +514,7 @@ ${text}`;
           isLoading: true
         }],
         searchContext,
-        screenshot
+        await captureAreaAroundShapes(relevantShapes)
       );
 
       // Update user message to remove loading state

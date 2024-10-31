@@ -1,9 +1,10 @@
 import { Groq } from 'groq-sdk';
 import { NextResponse } from 'next/server';
-
+import { OpenAI } from 'openai';
 // Initialize GROQ with API key from environment variable
-const groq = new Groq({
-  apiKey: process.env.GROQ_API_KEY
+const or = new OpenAI({
+  apiKey: process.env.OPENROUTER_API_KEY,
+  baseURL: 'https://openrouter.ai/api/v1'
 });
 
 export async function POST(request: Request) {
@@ -23,7 +24,6 @@ export async function POST(request: Request) {
       role: msg.role,
       content: msg.content
     })));
-
     // Add image if available
     if (base64Image) {
       formattedMessages.push({
@@ -43,11 +43,10 @@ export async function POST(request: Request) {
       });
     }
 
-    const completion = await groq.chat.completions.create({
+    const completion = await or.chat.completions.create({
       messages: formattedMessages,
-      model: "llama-3.2-11b-vision-preview",
+      model: "openai/gpt-4o-mini",
       max_tokens: 2048,
-      stream: false
     });
 
     return NextResponse.json({
