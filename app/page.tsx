@@ -107,6 +107,31 @@ interface Settings {
   groqApiKey: string;
 }
 
+// Add this component near the top of the file, before the Home component
+const LoadingSpinner: React.FC = () => (
+  <div style={{
+    display: 'inline-flex',
+    marginLeft: '8px',
+    verticalAlign: 'middle'
+  }}>
+    <style jsx>{`
+      @keyframes spin {
+        0% { transform: rotate(0deg); }
+        100% { transform: rotate(360deg); }
+      }
+      .spinner {
+        width: 12px;
+        height: 12px;
+        border: 2px solid currentColor;
+        border-right-color: transparent;
+        border-radius: 50%;
+        animation: spin 0.75s linear infinite;
+      }
+    `}</style>
+    <div className="spinner" />
+  </div>
+);
+
 export default function Home() {
   const [query, setQuery] = useState<string>('');
   const [results, setResults] = useState<ObjectItem[]>([]);
