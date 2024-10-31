@@ -17,6 +17,9 @@ const nextConfig = {
 
     return config;
   },
+  experimental: {
+		serverComponentsExternalPackages: ['@tldraw/tldraw'],
+	},
 };
 
 export default nextConfig;
