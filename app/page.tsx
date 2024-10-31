@@ -113,6 +113,7 @@ export default function Home() {
   const [editor, setEditor] = useState<Editor | null>(null);
   const embeddingIndexRef = useRef<EmbeddingIndex | null>(null);
   const [store] = useState(() => createTLStore());
+  const [isLoading, setIsLoading] = useState(false);
   const [loadingState, setLoadingState] = useState<
     { status: 'loading' } | { status: 'ready' } | { status: 'error'; error: string }
   >({
