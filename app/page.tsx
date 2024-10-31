@@ -1,32 +1,10 @@
 'use client'
 
-import React, { useEffect, useState, useRef, Suspense } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import { getEmbedding, EmbeddingIndex } from 'client-vector-search';
-import dynamic from 'next/dynamic';
+import { Tldraw, useEditor, Editor, Vec, createTLStore, TLStore, Box, exportAs, copyAs, exportToBlob } from '@tldraw/tldraw'
+import '@tldraw/tldraw/tldraw.css'
 import Groq from 'groq-sdk';
-
-// Dynamically import TLDraw with no SSR
-const TldrawWrapper = dynamic(
-  () => import('@tldraw/tldraw').then((mod) => {
-    const { Tldraw } = mod;
-    return ({ children, ...props }: any) => (
-      <Tldraw {...props}>
-        {children}
-      </Tldraw>
-    );
-  }),
-  { ssr: false }
-);
-
-// Import other TLDraw components dynamically
-const {
-  useEditor,
-  Editor,
-  Vec,
-  createTLStore,
-  Box,
-  exportToBlob
-} = await import('@tldraw/tldraw');
 
 interface ObjectItem {
   id: string;
@@ -719,15 +697,13 @@ ${text}`;
               Error loading whiteboard: {loadingState.error}
             </div>
           ) : (
-            <Suspense fallback={<div>Loading whiteboard...</div>}>
-              <TldrawWrapper
-                store={store}
-                onMount={setEditor}
-                autoFocus
-              >
-                <WhiteboardWithSearch onShapesChange={updateVectorIndex} />
-              </TldrawWrapper>
-            </Suspense>
+            <Tldraw
+              store={store}
+              onMount={setEditor}
+              autoFocus
+            >
+              <WhiteboardWithSearch onShapesChange={updateVectorIndex} />
+            </Tldraw>
           )}
         </div>
       </div>
@@ -1062,6 +1038,30 @@ const styles: { [key: string]: React.CSSProperties } = {
     color: '#666666',
     marginTop: '4px',
   },
+
+  loadingSpinner: {
+    display: 'inline-flex',
+    marginLeft: '8px',
+    verticalAlign: 'middle'
+  },
+  
+  spinner: {
+    width: '12px',
+    height: '12px',
+    border: '2px solid currentColor',
+    borderRightColor: 'transparent',
+    borderRadius: '50%',
+    animation: 'spin 0.75s linear infinite',
+  },
+
+  '@keyframes spin': {
+    from: {
+      transform: 'rotate(0deg)'
+    },
+    to: {
+      transform: 'rotate(360deg)'
+    }
+  }
 };
 
 const globalStyles = `

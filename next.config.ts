@@ -8,6 +8,7 @@ const nextConfig = {
   typescript: {
     ignoreBuildErrors: true,
   },
+  assetPrefix: process.env.NODE_ENV === 'production' ? '/arkeith/' : '',
   webpack: (config: any) => {
     config.resolve.alias = {
       ...config.resolve.alias,
