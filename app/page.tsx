@@ -2,7 +2,7 @@
 
 import React, { useEffect, useState, useRef } from 'react';
 import { getEmbedding, EmbeddingIndex } from 'client-vector-search';
-import { Tldraw, useEditor, Editor, Vec, createTLStore, TLStore } from '@tldraw/tldraw'
+import { Tldraw, useEditor, Editor, Vec, createTLStore, TLStore, Box, exportAs, copyAs, exportToBlob } from '@tldraw/tldraw'
 import '@tldraw/tldraw/tldraw.css'
 
 interface ObjectItem {
@@ -95,6 +95,13 @@ const getEmbeddingWithRetry = async (text: string, retries = 3): Promise<number[
 };
 
 const PERSISTENCE_KEY = 'tldraw-whiteboard-state';
+
+interface ChatMessage {
+  role: 'user' | 'assistant';
+  content: string;
+  screenshot?: string;
+}
+
 export default function Home() {
   const [query, setQuery] = useState<string>('');
   const [results, setResults] = useState<ObjectItem[]>([]);
@@ -106,6 +113,9 @@ export default function Home() {
   >({
     status: 'loading',
   });
+  const [isChatMode, setIsChatMode] = useState(false);
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [chatInput, setChatInput] = useState('');
 
   // Load persisted state
   useEffect(() => {
@@ -310,68 +320,238 @@ export default function Home() {
     }
   };
 
+  // Add this constant for screenshot dimensions
+  const SCREENSHOT_SIZE = {
+    width: 800,
+    height: 600
+  };
+
+  // Update the captureAreaAroundShapes function
+  const captureAreaAroundShapes = async (shapes: { position: Vec }[]) => {
+    if (!editor || shapes.length === 0) return null;
+
+    try {
+      // Calculate the median position
+      const positions = shapes.map(s => s.position);
+      const sortedX = [...positions].sort((a, b) => a.x - b.x);
+      const sortedY = [...positions].sort((a, b) => a.y - b.y);
+      
+      const medianX = sortedX[Math.floor(positions.length / 2)].x;
+      const medianY = sortedY[Math.floor(positions.length / 2)].y;
+
+      // Create a fixed-size box centered on the median position
+      const box = new Box(
+        medianX - SCREENSHOT_SIZE.width / 2,
+        medianY - SCREENSHOT_SIZE.height / 2,
+        SCREENSHOT_SIZE.width,
+        SCREENSHOT_SIZE.height
+      );
+
+      // Get all shapes within the box
+      const shapesInBox = editor.getCurrentPageShapes().filter((s) => {
+        const pageBounds = editor.getShapeMaskedPageBounds(s);
+        if (!pageBounds) return false;
+        return box.includes(pageBounds);
+      });
+
+      if (shapesInBox.length === 0) return null;
+
+      // Export the shapes as PNG
+      const blob = await exportToBlob({
+        editor,
+        ids: shapesInBox.map(s => s.id),
+        format: 'png',
+        opts: {
+          bounds: box,
+          background: editor.getInstanceState().exportBackground
+        }
+      });
+
+      // Convert blob to base64
+      return new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onloadend = () => resolve(reader.result as string);
+        reader.onerror = reject;
+        reader.readAsDataURL(blob);
+      });
+
+    } catch (error) {
+      console.error('Failed to capture area:', error);
+      return null;
+    }
+  };
+
+  const handleChat = async () => {
+    if (!chatInput.trim() || !editor || !embeddingIndexRef.current) return;
+
+    try {
+      // Add user message
+      setMessages(prev => [...prev, { role: 'user', content: chatInput }]);
+      
+      // Get embeddings and search
+      const queryEmbedding = await getEmbeddingWithRetry(chatInput);
+      const searchResults = await embeddingIndexRef.current.search(queryEmbedding, {
+        topK: 10,
+        useStorage: 'indexedDB'
+      });
+
+      const relevantShapes = searchResults
+        .map(result => {
+          const shape = editor.getShape(result.object.shapeId);
+          if (!shape) return null;
+          const bounds = editor.getShapePageBounds(shape);
+          if (!bounds) return null;
+          return {
+            shape,
+            position: bounds.center,
+            similarity: result.similarity
+          };
+        })
+        .filter(Boolean);
+
+      if (relevantShapes.length > 0) {
+        // Capture screenshot of relevant area
+        const screenshot = await captureAreaAroundShapes(relevantShapes);
+
+        // Add assistant response
+        setMessages(prev => [...prev, {
+          role: 'assistant',
+          content: `Found ${relevantShapes.length} relevant items on the whiteboard.`,
+          screenshot
+        }]);
+
+        // Center view on the median position
+        const medianX = relevantShapes.sort((a, b) => a.position.x - b.position.x)[
+          Math.floor(relevantShapes.length / 2)
+        ].position.x;
+        const medianY = relevantShapes.sort((a, b) => a.position.y - b.position.y)[
+          Math.floor(relevantShapes.length / 2)
+        ].position.y;
+
+        editor.centerOnPoint(new Vec(medianX, medianY));
+        editor.zoomToFit();
+      } else {
+        setMessages(prev => [...prev, {
+          role: 'assistant',
+          content: 'No relevant content found on the whiteboard.'
+        }]);
+      }
+
+      // Clear input
+      setChatInput('');
+
+    } catch (error) {
+      console.error('Error during chat:', error);
+      setMessages(prev => [...prev, {
+        role: 'assistant',
+        content: 'Sorry, there was an error processing your message.'
+      }]);
+    }
+  };
+
   return (
     <div style={styles.container}>
-      <form 
-        style={styles.searchContainer}
-        onSubmit={(e) => {
-          e.preventDefault();
-          handleSearch();
-        }}
-      >
-        <input
-          type="text"
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          placeholder="Search within whiteboard..."
-          style={styles.input}
-        />
-        <button type="submit" style={styles.button}>Search</button>
-        <button 
-          type="button"
-          onClick={handleDeleteIndex} 
-          style={styles.deleteButton}
-        >
-          Clear Index
-        </button>
-      </form>
-      {results.length > 0 && (
-        <div style={styles.resultsContainer}>
-          <h3 style={styles.resultsTitle}>Results:</h3>
-          <ul style={styles.resultsList}>
-            {results.map((item) => (
-              <li 
-                key={item.id} 
-                style={styles.resultItem}
-                onClick={() => handleResultClick(item)}
-                onMouseEnter={(e) => {
-                  e.currentTarget.style.backgroundColor = '#f0f0f0';
-                  e.currentTarget.style.cursor = 'pointer';
-                }}
-                onMouseLeave={(e) => {
-                  e.currentTarget.style.backgroundColor = '#ffffff';
-                }}
-              >
-                {item.name}
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
-      <div style={styles.whiteboard}>
-        {loadingState.status === 'error' ? (
-          <div style={styles.errorMessage}>
-            Error loading whiteboard: {loadingState.error}
-          </div>
-        ) : (
-          <Tldraw
-            store={store}
-            onMount={setEditor}
-            autoFocus
+      <div style={styles.mainContent}>
+        <div style={styles.searchContainer}>
+          <input
+            type="text"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Search within whiteboard..."
+            style={styles.input}
+          />
+          <button type="submit" style={styles.button}>Search</button>
+          <button 
+            type="button"
+            onClick={handleDeleteIndex} 
+            style={styles.deleteButton}
           >
-            <WhiteboardWithSearch onShapesChange={updateVectorIndex} />
-          </Tldraw>
+            Clear Index
+          </button>
+        </div>
+        {results.length > 0 && (
+          <div style={styles.resultsContainer}>
+            <h3 style={styles.resultsTitle}>Results:</h3>
+            <ul style={styles.resultsList}>
+              {results.map((item) => (
+                <li 
+                  key={item.id} 
+                  style={styles.resultItem}
+                  onClick={() => handleResultClick(item)}
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.backgroundColor = '#f0f0f0';
+                    e.currentTarget.style.cursor = 'pointer';
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.backgroundColor = '#ffffff';
+                  }}
+                >
+                  {item.name}
+                </li>
+              ))}
+            </ul>
+          </div>
         )}
+        <div style={styles.whiteboard}>
+          {loadingState.status === 'error' ? (
+            <div style={styles.errorMessage}>
+              Error loading whiteboard: {loadingState.error}
+            </div>
+          ) : (
+            <Tldraw
+              store={store}
+              onMount={setEditor}
+              autoFocus
+            >
+              <WhiteboardWithSearch onShapesChange={updateVectorIndex} />
+            </Tldraw>
+          )}
+        </div>
+      </div>
+
+      <div style={styles.chatSidebar}>
+        <div style={styles.chatHeader}>
+          <h3 style={styles.chatTitle}>Chat</h3>
+        </div>
+        <div style={styles.messagesContainer}>
+          {messages.map((message, index) => (
+            <div 
+              key={index} 
+              style={message.role === 'user' ? styles.userMessage : styles.assistantMessage}
+            >
+              <div style={styles.messageContent}>{message.content}</div>
+              {message.screenshot && (
+                <div style={styles.screenshotContainer}>
+                  <img 
+                    src={message.screenshot} 
+                    alt="Relevant area"
+                    style={styles.screenshot}
+                    onClick={() => {
+                      // Open image in new tab for full view
+                      window.open(message.screenshot, '_blank');
+                    }}
+                  />
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+        <form 
+          style={styles.chatInputContainer}
+          onSubmit={(e) => {
+            e.preventDefault();
+            handleChat();
+          }}
+        >
+          <input
+            type="text"
+            value={chatInput}
+            onChange={(e) => setChatInput(e.target.value)}
+            placeholder="Ask about your whiteboard..."
+            style={styles.chatInput}
+          />
+          <button type="submit" style={styles.chatButton}>Send</button>
+        </form>
       </div>
     </div>
   );
@@ -381,10 +561,109 @@ const styles: { [key: string]: React.CSSProperties } = {
   container: {
     height: '100vh',
     display: 'flex',
-    flexDirection: 'column',
-    padding: '10px',
     gap: '10px',
+    padding: '10px',
     backgroundColor: '#ffffff',
+  },
+  mainContent: {
+    flex: 1,
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '10px',
+    minWidth: 0, // Prevent flex item from overflowing
+  },
+  chatSidebar: {
+    width: '300px',
+    display: 'flex',
+    flexDirection: 'column',
+    backgroundColor: '#f5f5f5',
+    borderRadius: '8px',
+    boxShadow: '-2px 0 5px rgba(0,0,0,0.1)',
+  },
+  chatHeader: {
+    padding: '15px',
+    borderBottom: '1px solid #ddd',
+  },
+  chatTitle: {
+    margin: 0,
+    color: '#333',
+    fontSize: '16px',
+    fontWeight: '500',
+  },
+  messagesContainer: {
+    flex: 1,
+    overflowY: 'auto',
+    padding: '10px',
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '10px',
+  },
+  userMessage: {
+    alignSelf: 'flex-end',
+    backgroundColor: '#0066cc',
+    color: 'white',
+    padding: '8px 12px',
+    borderRadius: '12px 12px 0 12px',
+    maxWidth: '85%',
+  },
+  assistantMessage: {
+    alignSelf: 'flex-start',
+    backgroundColor: 'white',
+    padding: '8px 12px',
+    borderRadius: '12px 12px 12px 0',
+    maxWidth: '85%',
+    boxShadow: '0 2px 4px rgba(0,0,0,0.1)',
+  },
+  messageContent: {
+    marginBottom: '8px',
+    wordBreak: 'break-word',
+  },
+  screenshotContainer: {
+    position: 'relative',
+    width: '100%',
+    borderRadius: '4px',
+    overflow: 'hidden',
+    cursor: 'pointer',
+  },
+  screenshot: {
+    width: '100%',
+    height: 'auto',
+    display: 'block',
+    transition: 'transform 0.2s ease',
+    '&:hover': {
+      transform: 'scale(1.02)',
+    },
+  },
+  chatInputContainer: {
+    padding: '10px',
+    borderTop: '1px solid #ddd',
+    display: 'flex',
+    gap: '8px',
+  },
+  chatInput: {
+    flex: 1,
+    padding: '8px 12px',
+    fontSize: '14px',
+    borderRadius: '20px',
+    border: '1px solid #ddd',
+    backgroundColor: '#ffffff',
+    '&:focus': {
+      outline: 'none',
+      borderColor: '#0066cc',
+    },
+  },
+  chatButton: {
+    padding: '8px 16px',
+    fontSize: '14px',
+    cursor: 'pointer',
+    backgroundColor: '#0066cc',
+    color: 'white',
+    border: 'none',
+    borderRadius: '20px',
+    fontWeight: '500',
+    '&:hover': {
+      backgroundColor: '#0052a3',
+    },
   },
   searchContainer: {
     display: 'flex',
