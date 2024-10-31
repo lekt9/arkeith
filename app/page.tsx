@@ -9,8 +9,7 @@ interface ObjectItem {
   id: string;
   name: string;
   embedding: number[];
-  shapeId?: string;
-  position?: { x: number; y: number };
+  shapeId: string;
 }
 
 interface WhiteboardWithSearchProps {
@@ -25,6 +24,7 @@ const CLUSTER_THRESHOLD = 200;
 
 const WhiteboardWithSearch: React.FC<WhiteboardWithSearchProps> = ({ onShapesChange }) => {
   const editor = useEditor();
+  const previousShapesRef = useRef<Map<string, { text: string; center: Vec }>>(new Map());
 
   useEffect(() => {
     if (!editor) return () => {};
@@ -39,17 +39,35 @@ const WhiteboardWithSearch: React.FC<WhiteboardWithSearchProps> = ({ onShapesCha
         shape.props.text?.trim()
       );
       
+      let hasChanges = false;
+
       changedShapes.forEach((shape) => {
         const bounds = editor.getShapePageBounds(shape);
         if (bounds) {
-          newTextShapes.set(shape.id, {
+          const newData = {
             text: shape.props.text || '',
             center: bounds.center
-          });
+          };
+          newTextShapes.set(shape.id, newData);
+
+          // Check if this shape has changed
+          const previousData = previousShapesRef.current.get(shape.id);
+          if (!previousData || 
+              previousData.text !== newData.text ||
+              previousData.center.x !== newData.center.x ||
+              previousData.center.y !== newData.center.y) {
+            hasChanges = true;
+          }
         }
       });
+
+      // Check for deleted shapes
+      if (previousShapesRef.current.size !== newTextShapes.size) {
+        hasChanges = true;
+      }
       
-      if (newTextShapes.size > 0) {
+      if (hasChanges) {
+        previousShapesRef.current = newTextShapes;
         onShapesChange(newTextShapes);
       }
     };
@@ -88,7 +106,13 @@ export default function Home() {
   }, []);
 
   const updateVectorIndex = async (textShapes: Map<string, { text: string; center: Vec }>) => {
-    if (!embeddingIndexRef.current) return;
+    if (!embeddingIndexRef.current || !editor) return;
+
+    console.log('Starting index update...');
+
+    // Get all existing objects to track what needs to be deleted
+    const existingObjects = await embeddingIndexRef.current.getAllObjectsFromIndexedDB('indexedDB');
+    const existingShapeIds = new Map(existingObjects.map(obj => [obj.shapeId, obj]));
 
     const shapes = Array.from(textShapes.entries()).map(([id, data]) => ({
       id,
@@ -96,6 +120,7 @@ export default function Home() {
       center: data.center
     }));
 
+    // Create clusters as before
     const clusters = shapes.reduce((acc: { shapes: any[], center: Vec }[], shape) => {
       const existingCluster = acc.find(cluster => 
         calculateDistance(shape.center, cluster.center) < CLUSTER_THRESHOLD
@@ -124,17 +149,43 @@ export default function Home() {
       
       if (combinedText) {
         try {
+          // Check if any shape in this cluster has an existing embedding
+          const existingEmbeddings = cluster.shapes
+            .map(shape => existingShapeIds.get(shape.id))
+            .filter(Boolean);
+
+          if (existingEmbeddings.length > 0) {
+            console.log('Found existing embeddings for cluster:', {
+              text: combinedText,
+              count: existingEmbeddings.length
+            });
+
+            // Remove old embeddings
+            for (const existing of existingEmbeddings) {
+              await embeddingIndexRef.current.remove({ id: existing.id });
+              console.log('Removed old embedding:', {
+                id: existing.id,
+                text: existing.name,
+                shapeId: existing.shapeId
+              });
+            }
+          }
+
+          // Create new embedding without position
           const embedding = await getEmbeddingWithRetry(combinedText);
           const object: ObjectItem = {
             id: `cluster-${Date.now()}-${Math.random()}`,
             name: combinedText,
             embedding,
-            shapeId: cluster.shapes[0].id,
-            position: cluster.center
+            shapeId: cluster.shapes[0].id
           };
           
           await embeddingIndexRef.current.add(object);
-          console.log('Added to index:', object);
+          console.log('Added/Updated embedding:', {
+            text: combinedText,
+            shapeId: object.shapeId
+          });
+
         } catch (error) {
           console.error('Failed to process cluster:', error);
         }
@@ -142,52 +193,43 @@ export default function Home() {
     }
 
     await embeddingIndexRef.current.saveIndex('indexedDB');
+    console.log('Index update completed');
   };
 
   const handleSearch = async () => {
-    if (!query.trim() || !editor || !embeddingIndexRef.current) {
-      console.log('Search prerequisites not met:', { 
-        query: !!query.trim(), 
-        editor: !!editor, 
-        embeddingIndex: !!embeddingIndexRef.current 
-      });
-      return;
-    }
+    if (!query.trim() || !editor || !embeddingIndexRef.current) return;
 
     try {
       console.log('Starting search for:', query);
       const queryEmbedding = await getEmbeddingWithRetry(query);
-      console.log('Got embedding:', queryEmbedding);
-
+      
       const searchResults = await embeddingIndexRef.current.search(queryEmbedding);
       console.log('Raw search results:', searchResults);
 
       const typedResults = searchResults.map(result => result.object) as ObjectItem[];
       setResults(typedResults);
       
-      console.log('Processed Search Results:', typedResults.map(result => ({
-        text: result.name,
-        position: result.position,
-        shapeId: result.shapeId
-      })));
-
       if (typedResults.length > 0) {
         const topResult = typedResults[0];
-        if (topResult.position) {
-          const targetPosition = new Vec(
-            topResult.position.x,
-            topResult.position.y,
-            topResult.position.z || 0
-          );
-          
-          editor.centerOnPoint(targetPosition);
-          if (topResult.shapeId) {
-            const shape = editor.getShapeById(topResult.shapeId);
-            if (shape) {
-              editor.select(topResult.shapeId);
-              editor.zoomToSelection();
-            }
+        const shape = editor.getShape(topResult["shapeId"]);
+        
+        if (shape) {
+          // Get current bounds of the shape
+          const bounds = editor.getShapePageBounds(shape);
+          if (bounds) {
+            // Center on the current position of the shape
+            editor.centerOnPoint(bounds.center);
+            editor.select(shape.id);
+            editor.zoomToSelection();
+            
+            console.log('Centered on shape:', {
+              text: topResult.name,
+              shapeId: topResult["shapeId"],
+              currentPosition: bounds.center
+            });
           }
+        } else {
+          console.log('Shape not found:', topResult.shapeId);
         }
       }
     } catch (error) {
