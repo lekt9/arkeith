@@ -397,39 +397,55 @@ export default function Home() {
   // Update the generateChatResponse function
   const generateChatResponse = async (
     messages: ChatMessage[], 
-    screenshot: string | null
+    searchContext: string,
+    base64Image: string | null
   ) => {
     if (!settings.groqApiKey) {
       throw new Error('Please set your GROQ API key in settings');
     }
 
     try {
-      // Format messages for GROQ
-      const formattedMessages = messages.map(msg => ({
+      const formattedMessages = [
+      ]
+
+      // Start with system message and search context
+      formattedMessages.push(...[
+        {
+          role: "user",
+          content: `You are an AI assistant helping to analyze and discuss content from a whiteboard. The user's query is related to the following content found on the whiteboard:\n\n${searchContext}`
+        }
+      ]);
+
+      // Add conversation history
+      formattedMessages.push(...messages.map(msg => ({
         role: msg.role,
         content: msg.content
-      }));
-
-      // Add the current screenshot if available
-      if (screenshot) {
+      })));
+      // Add the image as a separate message if available
+      if (base64Image) {
         formattedMessages.push({
           role: "user",
           content: [
             {
               type: "text",
-              text: "Consider this area of the whiteboard:"
+              text: "Here is the relevant section of the whiteboard:" + searchContext
             },
             {
               type: "image_url",
               image_url: {
-                url: screenshot
+                url: base64Image
               }
             }
           ]
         });
       }
 
-      console.log('Sending messages to GROQ:', formattedMessages);
+
+      console.log('Sending messages to GROQ:', {
+        messageCount: formattedMessages.length,
+        hasImage: !!base64Image,
+        searchContext: searchContext.substring(0, 100) + '...' // Log preview of context
+      });
 
       const completion = await groq.chat.completions.create({
         messages: formattedMessages,
@@ -460,20 +476,26 @@ export default function Home() {
     groq.apiKey = settings.groqApiKey;
 
     try {
-      // Add user message
-      const userMessage: ChatMessage = { 
-        role: 'user', 
-        content: chatInput
-      };
-      setMessages(prev => [...prev, userMessage]);
-
-      // Get embeddings and search
+      // First, perform the search
       const queryEmbedding = await getEmbeddingWithRetry(chatInput);
       const searchResults = await embeddingIndexRef.current.search(queryEmbedding, {
-        topK: 10,
+        topK: 15,
         useStorage: 'indexedDB'
       });
 
+      // Collect detailed search context
+      const searchContext = searchResults
+        .map(result => {
+          const shape = editor.getShape(result.object.shapeId);
+          const text = shape && 'text' in shape.props ? shape.props.text : '';
+          return `Content ID: ${result.object.id}
+Text: ${text || result.object.name}`;
+        })
+        .join('\n\n');
+
+      console.log('Search context:', searchContext);
+
+      // Find relevant shapes and capture screenshot
       const relevantShapes = searchResults
         .map(result => {
           const shape = editor.getShape(result.object.shapeId);
@@ -488,25 +510,12 @@ export default function Home() {
         })
         .filter(Boolean);
 
-      // Capture screenshot
-      const screenshot = relevantShapes.length > 0 
-        ? await captureAreaAroundShapes(relevantShapes)
-        : null;
-      setCurrentScreenshot(screenshot);
-
-      // Get AI response
-      const aiResponse = await generateChatResponse(
-        [...messages, userMessage],
-        screenshot
-      );
-
-      // Add assistant response
-      setMessages(prev => [...prev, {
-        role: 'assistant',
-        content: aiResponse
-      }]);
-
+      // Capture screenshot if there are relevant shapes
+      let screenshot: string | null = null;
       if (relevantShapes.length > 0) {
+        screenshot = await captureAreaAroundShapes(relevantShapes);
+        setCurrentScreenshot(screenshot);
+
         // Center view on the median position
         const medianX = relevantShapes.sort((a, b) => a.position.x - b.position.x)[
           Math.floor(relevantShapes.length / 2)
@@ -516,7 +525,29 @@ export default function Home() {
         ].position.y;
 
         editor.centerOnPoint(new Vec(medianX, medianY));
+      } else {
+        setCurrentScreenshot(null);
       }
+
+      // Add user message
+      const userMessage: ChatMessage = { 
+        role: 'user', 
+        content: chatInput
+      };
+      setMessages(prev => [...prev, userMessage]);
+
+      // Get AI response with search context and screenshot
+      const aiResponse = await generateChatResponse(
+        [...messages, userMessage],
+        searchContext,
+        screenshot
+      );
+
+      // Add assistant response
+      setMessages(prev => [...prev, {
+        role: 'assistant',
+        content: aiResponse
+      }]);
 
       // Clear input
       setChatInput('');
