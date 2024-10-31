@@ -15,7 +15,7 @@ export async function POST(request: Request) {
     // Add system message and search context
     formattedMessages.push({
       role: "user",
-      content: `You are an AI assistant helping to analyze and discuss content from a whiteboard. The user's query is related to the following content found on the whiteboard, make sense of it and assume that this part is just text extracted from the whiteboard - ignore gibberish and do not mention how many times something occurs or describe the context:\n\n${searchContext}`
+      content: `You are an AI assistant helping to analyze and discuss content from a whiteboard. The user's query is related to the following content found on the whiteboard, make sense of it and assume that this part is just text extracted from the whiteboard - ignore gibberish and do not mention how many times something occurs or describe the context:\n\n${searchContext}. Do not respond with any formatting or markdown.`
     });
 
     // Add conversation history
