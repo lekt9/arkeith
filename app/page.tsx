@@ -100,6 +100,7 @@ const PERSISTENCE_KEY = 'tldraw-whiteboard-state';
 interface ChatMessage {
   role: 'user' | 'assistant';
   content: string;
+  isLoading?: boolean;
 }
 
 interface Settings {
@@ -412,7 +413,7 @@ export default function Home() {
       formattedMessages.push(...[
         {
           role: "user",
-          content: `You are an AI assistant helping to analyze and discuss content from a whiteboard. The user's query is related to the following content found on the whiteboard:\n\n${searchContext}`
+          content: `You are an AI assistant helping to analyze and discuss content from a whiteboard. The user's query is related to the following content found on the whiteboard, make sense of it and assume that this part is just text extracted from the whiteboard - ignore gibberish:\n\n${searchContext}`
         }
       ]);
 
@@ -473,13 +474,25 @@ export default function Home() {
       }]);
       return;
     }
+    
+    const userInputText = chatInput;
+    setChatInput(''); // Clear input immediately
+    
+    // Add user message with loading state
+    setMessages(prev => [...prev, {
+      role: 'user',
+      content: userInputText,
+      isLoading: true
+    }]);
+    
+    setIsLoading(true);
     groq.apiKey = settings.groqApiKey;
 
     try {
       // First, perform the search
-      const queryEmbedding = await getEmbeddingWithRetry(chatInput);
+      const queryEmbedding = await getEmbeddingWithRetry(userInputText);
       const searchResults = await embeddingIndexRef.current.search(queryEmbedding, {
-        topK: 15,
+        topK: 100,
         useStorage: 'indexedDB'
       });
 
@@ -488,8 +501,8 @@ export default function Home() {
         .map(result => {
           const shape = editor.getShape(result.object.shapeId);
           const text = shape && 'text' in shape.props ? shape.props.text : '';
-          return `Content ID: ${result.object.id}
-Text: ${text || result.object.name}`;
+          return `
+${text}`;
         })
         .join('\n\n');
 
@@ -529,35 +542,41 @@ Text: ${text || result.object.name}`;
         setCurrentScreenshot(null);
       }
 
-      // Add user message
-      const userMessage: ChatMessage = { 
-        role: 'user', 
-        content: chatInput
-      };
-      setMessages(prev => [...prev, userMessage]);
-
       // Get AI response with search context and screenshot
       const aiResponse = await generateChatResponse(
-        [...messages, userMessage],
+        [...messages, {
+          role: 'user',
+          content: userInputText,
+          isLoading: true
+        }],
         searchContext,
         screenshot
       );
 
-      // Add assistant response
+      // Update user message to remove loading state
+      setMessages(prev => prev.map((msg, idx) => 
+        idx === prev.length - 1 ? { ...msg, isLoading: false } : msg
+      ));
+
+      // Add assistant message
       setMessages(prev => [...prev, {
         role: 'assistant',
         content: aiResponse
       }]);
 
-      // Clear input
-      setChatInput('');
-
     } catch (error) {
       console.error('Error during chat:', error);
-      setMessages(prev => [...prev, {
-        role: 'assistant',
-        content: 'Sorry, there was an error processing your message.'
-      }]);
+      // Update user message to remove loading state and add error message
+      setMessages(prev => [
+        ...prev.slice(0, -1),
+        { ...prev[prev.length - 1], isLoading: false },
+        {
+          role: 'assistant',
+          content: 'Sorry, there was an error processing your message.'
+        }
+      ]);
+    } finally {
+      setIsLoading(false);
     }
   };
 
@@ -675,6 +694,7 @@ Text: ${text || result.object.name}`;
             >
               <div style={styles.messageContent}>
                 {message.content}
+                {message.isLoading && <LoadingSpinner />}
               </div>
             </div>
           ))}
@@ -695,17 +715,30 @@ Text: ${text || result.object.name}`;
           style={styles.chatInputContainer}
           onSubmit={(e) => {
             e.preventDefault();
-            handleChat();
+            if (!isLoading) {
+              handleChat();
+            }
           }}
         >
           <input
             type="text"
             value={chatInput}
             onChange={(e) => setChatInput(e.target.value)}
-            placeholder="Ask about your whiteboard..."
+            placeholder={isLoading ? "Processing..." : "Ask about your whiteboard..."}
             style={styles.chatInput}
+            disabled={isLoading}
           />
-          <button type="submit" style={styles.chatButton}>Send</button>
+          <button 
+            type="submit" 
+            style={{
+              ...styles.chatButton,
+              opacity: isLoading ? 0.7 : 1,
+              cursor: isLoading ? 'not-allowed' : 'pointer'
+            }}
+            disabled={isLoading}
+          >
+            Send
+          </button>
         </form>
       </div>
     </div>
@@ -979,4 +1012,39 @@ const styles: { [key: string]: React.CSSProperties } = {
     color: '#666666',
     marginTop: '4px',
   },
+
+  loadingSpinner: {
+    display: 'inline-flex',
+    marginLeft: '8px',
+    verticalAlign: 'middle'
+  },
+  
+  spinner: {
+    width: '12px',
+    height: '12px',
+    border: '2px solid currentColor',
+    borderRightColor: 'transparent',
+    borderRadius: '50%',
+    animation: 'spin 0.75s linear infinite',
+  },
+
+  '@keyframes spin': {
+    from: {
+      transform: 'rotate(0deg)'
+    },
+    to: {
+      transform: 'rotate(360deg)'
+    }
+  }
 };
+
+const globalStyles = `
+  @keyframes spin {
+    from {
+      transform: rotate(0deg);
+    }
+    to {
+      transform: rotate(360deg);
+    }
+  }
+`;

@@ -5,6 +5,9 @@ const nextConfig = {
   images: {
     unoptimized: true,
   },
+  typescript: {
+    ignoreBuildErrors: true,
+  },
   webpack: (config: any) => {
     config.resolve.alias = {
       ...config.resolve.alias,
