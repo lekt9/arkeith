@@ -4,6 +4,7 @@ import React, { useEffect, useState, useRef } from 'react';
 import { getEmbedding, EmbeddingIndex } from 'client-vector-search';
 import { Tldraw, useEditor, Editor, Vec, createTLStore, TLStore, Box, exportAs, copyAs, exportToBlob } from '@tldraw/tldraw'
 import '@tldraw/tldraw/tldraw.css'
+import Groq from 'groq-sdk';
 
 interface ObjectItem {
   id: string;
@@ -99,7 +100,10 @@ const PERSISTENCE_KEY = 'tldraw-whiteboard-state';
 interface ChatMessage {
   role: 'user' | 'assistant';
   content: string;
-  screenshot?: string;
+}
+
+interface Settings {
+  groqApiKey: string;
 }
 
 export default function Home() {
@@ -116,7 +120,20 @@ export default function Home() {
   const [isChatMode, setIsChatMode] = useState(false);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [chatInput, setChatInput] = useState('');
-
+  const groq = new Groq({
+    apiKey: '', // Start with empty API key
+    dangerouslyAllowBrowser: true
+  });
+  const [showSettings, setShowSettings] = useState(false);
+  const [settings, setSettings] = useState<Settings>(() => {
+    // Initialize settings from localStorage
+    if (typeof window !== 'undefined') {
+      const savedSettings = localStorage.getItem('whiteboard-settings');
+      return savedSettings ? JSON.parse(savedSettings) : { groqApiKey: '' };
+    }
+    return { groqApiKey: '' };
+  });
+  const [currentScreenshot, setCurrentScreenshot] = useState<string | null>(null);
   // Load persisted state
   useEffect(() => {
     try {
@@ -318,8 +335,8 @@ export default function Home() {
 
   // Add this constant for screenshot dimensions
   const SCREENSHOT_SIZE = {
-    width: 800,
-    height: 600
+    width: 2560,
+    height: 1440
   };
 
   // Update the captureAreaAroundShapes function
@@ -377,13 +394,79 @@ export default function Home() {
     }
   };
 
+  // Update the generateChatResponse function
+  const generateChatResponse = async (
+    messages: ChatMessage[], 
+    screenshot: string | null
+  ) => {
+    if (!settings.groqApiKey) {
+      throw new Error('Please set your GROQ API key in settings');
+    }
+
+    try {
+      // Format messages for GROQ
+      const formattedMessages = messages.map(msg => ({
+        role: msg.role,
+        content: msg.content
+      }));
+
+      // Add the current screenshot if available
+      if (screenshot) {
+        formattedMessages.push({
+          role: "user",
+          content: [
+            {
+              type: "text",
+              text: "Consider this area of the whiteboard:"
+            },
+            {
+              type: "image_url",
+              image_url: {
+                url: screenshot
+              }
+            }
+          ]
+        });
+      }
+
+      console.log('Sending messages to GROQ:', formattedMessages);
+
+      const completion = await groq.chat.completions.create({
+        messages: formattedMessages,
+        model: "llama-3.2-11b-vision-preview",
+        temperature: 0.7,
+        max_tokens: 2048,
+        top_p: 1,
+        stream: false
+      });
+
+      return completion.choices[0]?.message?.content || 'No response generated';
+    } catch (error) {
+      console.error('Error generating chat response:', error);
+      throw error;
+    }
+  };
+
+  // Update the handleChat function
   const handleChat = async () => {
     if (!chatInput.trim() || !editor || !embeddingIndexRef.current) return;
+    if (!settings.groqApiKey) {
+      setMessages(prev => [...prev, {
+        role: 'assistant',
+        content: 'Please set your GROQ API key in settings first.'
+      }]);
+      return;
+    }
+    groq.apiKey = settings.groqApiKey;
 
     try {
       // Add user message
-      setMessages(prev => [...prev, { role: 'user', content: chatInput }]);
-      
+      const userMessage: ChatMessage = { 
+        role: 'user', 
+        content: chatInput
+      };
+      setMessages(prev => [...prev, userMessage]);
+
       // Get embeddings and search
       const queryEmbedding = await getEmbeddingWithRetry(chatInput);
       const searchResults = await embeddingIndexRef.current.search(queryEmbedding, {
@@ -405,18 +488,26 @@ export default function Home() {
         })
         .filter(Boolean);
 
+      // Capture screenshot
+      const screenshot = relevantShapes.length > 0 
+        ? await captureAreaAroundShapes(relevantShapes)
+        : null;
+      setCurrentScreenshot(screenshot);
+
+      // Get AI response
+      const aiResponse = await generateChatResponse(
+        [...messages, userMessage],
+        screenshot
+      );
+
+      // Add assistant response
+      setMessages(prev => [...prev, {
+        role: 'assistant',
+        content: aiResponse
+      }]);
+
       if (relevantShapes.length > 0) {
-        // Capture screenshot of relevant area
-        const screenshot = await captureAreaAroundShapes(relevantShapes);
-
-        // Add assistant response
-        setMessages(prev => [...prev, {
-          role: 'assistant',
-          content: `Found ${relevantShapes.length} relevant items on the whiteboard.`,
-          screenshot
-        }]);
-
-        // Center view on the median position without changing zoom
+        // Center view on the median position
         const medianX = relevantShapes.sort((a, b) => a.position.x - b.position.x)[
           Math.floor(relevantShapes.length / 2)
         ].position.x;
@@ -424,13 +515,7 @@ export default function Home() {
           Math.floor(relevantShapes.length / 2)
         ].position.y;
 
-        // Only pan to the point, don't zoom
         editor.centerOnPoint(new Vec(medianX, medianY));
-      } else {
-        setMessages(prev => [...prev, {
-          role: 'assistant',
-          content: 'No relevant content found on the whiteboard.'
-        }]);
       }
 
       // Clear input
@@ -445,6 +530,19 @@ export default function Home() {
     }
   };
 
+  useEffect(() => {
+    if (settings.groqApiKey) {
+      groq.apiKey = settings.groqApiKey;
+      console.log('Initialized GROQ with API key from settings');
+    }
+  }, [settings.groqApiKey]);
+
+  const handleSettingsUpdate = (newSettings: Settings) => {
+    setSettings(newSettings);
+    localStorage.setItem('whiteboard-settings', JSON.stringify(newSettings));
+    groq.apiKey = newSettings.groqApiKey;
+  };
+
   return (
     <div style={styles.container}>
       <div style={styles.mainContent}>
@@ -457,14 +555,43 @@ export default function Home() {
             style={styles.input}
           />
           <button type="submit" style={styles.button}>Search</button>
-          <button 
+          {/* <button 
             type="button"
             onClick={handleDeleteIndex} 
             style={styles.deleteButton}
           >
             Clear Index
+          </button> */}
+          <button
+            type="button"
+            onClick={() => setShowSettings(!showSettings)}
+            style={styles.settingsButton}
+          >
+            ⚙️ Settings
           </button>
         </div>
+
+        {showSettings && (
+          <div style={styles.settingsPane}>
+            <h3 style={styles.settingsTitle}>Settings</h3>
+            <div style={styles.settingGroup}>
+              <label style={styles.settingLabel}>
+                GROQ API Key:
+                <input
+                  type="password"
+                  value={settings.groqApiKey}
+                  onChange={(e) => handleSettingsUpdate({ ...settings, groqApiKey: e.target.value })}
+                  placeholder="Enter your GROQ API key"
+                  style={styles.settingInput}
+                />
+              </label>
+            </div>
+            <div style={styles.settingHelp}>
+              Your API key is stored locally and never sent to any server except GROQ.
+            </div>
+          </div>
+        )}
+
         {results.length > 0 && (
           <div style={styles.resultsContainer}>
             <h3 style={styles.resultsTitle}>Results:</h3>
@@ -515,22 +642,23 @@ export default function Home() {
               key={index} 
               style={message.role === 'user' ? styles.userMessage : styles.assistantMessage}
             >
-              <div style={styles.messageContent}>{message.content}</div>
-              {message.screenshot && (
-                <div style={styles.screenshotContainer}>
-                  <img 
-                    src={message.screenshot} 
-                    alt="Relevant area"
-                    style={styles.screenshot}
-                    onClick={() => {
-                      // Open image in new tab for full view
-                      window.open(message.screenshot, '_blank');
-                    }}
-                  />
-                </div>
-              )}
+              <div style={styles.messageContent}>
+                {message.content}
+              </div>
             </div>
           ))}
+          {currentScreenshot && (
+            <div style={styles.screenshotContainer}>
+              <img 
+                src={currentScreenshot} 
+                alt="Current context"
+                style={styles.screenshot}
+                onClick={() => {
+                  window.open(currentScreenshot, '_blank');
+                }}
+              />
+            </div>
+          )}
         </div>
         <form 
           style={styles.chatInputContainer}
@@ -758,5 +886,66 @@ const styles: { [key: string]: React.CSSProperties } = {
     border: '1px solid #ff4d4d',
     borderRadius: '8px',
     margin: '20px',
+  },
+  settingsButton: {
+    padding: '8px 16px',
+    fontSize: '14px',
+    backgroundColor: '#666666',
+    color: '#fff',
+    border: 'none',
+    borderRadius: '4px',
+    cursor: 'pointer',
+    fontWeight: '500',
+    display: 'flex',
+    alignItems: 'center',
+    gap: '4px',
+  },
+
+  settingsPane: {
+    position: 'absolute',
+    top: '60px',
+    right: '320px', // Adjusted to not overlap with chat sidebar
+    width: '300px',
+    backgroundColor: '#ffffff',
+    borderRadius: '8px',
+    boxShadow: '0 2px 8px rgba(0,0,0,0.2)',
+    padding: '16px',
+    zIndex: 1000,
+  },
+
+  settingsTitle: {
+    margin: '0 0 16px 0',
+    color: '#333333',
+    fontSize: '16px',
+    fontWeight: '500',
+  },
+
+  settingGroup: {
+    marginBottom: '16px',
+  },
+
+  settingLabel: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '4px',
+    color: '#333333',
+    fontSize: '14px',
+  },
+
+  settingInput: {
+    padding: '8px 12px',
+    fontSize: '14px',
+    borderRadius: '4px',
+    border: '1px solid #ddd',
+    backgroundColor: '#ffffff',
+    color: '#000000',
+    width: '100%',
+    marginTop: '4px',
+  },
+
+  settingHelp: {
+    fontSize: '12px',
+    color: '#666666',
+    marginTop: '4px',
   },
 };
