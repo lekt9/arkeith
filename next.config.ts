@@ -1,14 +1,12 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   output: 'export',
-  basePath: process.env.NODE_ENV === 'production' ? '/arkeith' : '',
   images: {
     unoptimized: true,
   },
   typescript: {
     ignoreBuildErrors: true,
   },
-  assetPrefix: process.env.NODE_ENV === 'production' ? '/arkeith/' : '',
   webpack: (config: any) => {
     config.resolve.alias = {
       ...config.resolve.alias,

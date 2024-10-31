@@ -9,6 +9,7 @@
     "lint": "next lint",
     "deploy": "next build && touch out/.nojekyll && git add out/ && git commit -m \"Deploy\" && git subtree push --prefix out origin gh-pages"
   },
+  "homepage": "https://lekt9.github.io/arkeith/",
   "dependencies": {
     "@huggingface/transformers": "^3.0.0-alpha.5",
     "@tldraw/tldraw": "^3.4.0",
